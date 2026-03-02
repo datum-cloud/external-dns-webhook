@@ -1,0 +1,89 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: txt-ownership-record
+spec:
+  description: |
+    Verify that ExternalDNS creates TXT records for ownership tracking alongside A records.
+  steps:
+  # Step 1: Verify clean state
+  - name: assert-clean-state
+    try:
+    - error:
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: test-txt-?*
+
+  # Step 2: Create HTTPRoute with test-txt hostname
+  - name: create-httproute
+    try:
+    - apply:
+        file: httproute.yaml
+
+  # Step 3: Assert TXT DNSRecordSet exists
+  - name: assert-txt-record-created
+    try:
+    - assert:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+          spec:
+            dnsZoneRef:
+              name: example-com
+            recordType: TXT
+            records:
+            - name: test-txt
+
+  # Step 4: Assert A DNSRecordSet also exists
+  - name: assert-a-record-created
+    try:
+    - assert:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+          spec:
+            dnsZoneRef:
+              name: example-com
+            recordType: A
+            records:
+            - name: test-txt
+
+  # Step 5: Cleanup - Delete HTTPRoute
+  - name: cleanup-httproute
+    try:
+    - delete:
+        ref:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: test-txt-httproute
+            namespace: default
+
+  # Step 6: Assert both records are removed
+  - name: assert-records-removed
+    try:
+    - error:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: test-txt-?*

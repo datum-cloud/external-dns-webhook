@@ -1,0 +1,73 @@
+# Simple controller that marks DNSZones as ready
+# In a real environment, this would be the actual dns-operator
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mock-dns-operator
+  namespace: dns-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mock-dns-operator
+rules:
+- apiGroups: ["dns.datum.net"]
+  resources: ["dnszones", "dnsrecordsets", "dnszoneclasses"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["dns.datum.net"]
+  resources: ["dnszones/status", "dnsrecordsets/status", "dnszoneclasses/status"]
+  verbs: ["update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mock-dns-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mock-dns-operator
+subjects:
+- kind: ServiceAccount
+  name: mock-dns-operator
+  namespace: dns-operator-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-dns-operator
+  namespace: dns-operator-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-dns-operator
+  template:
+    metadata:
+      labels:
+        app: mock-dns-operator
+    spec:
+      serviceAccountName: mock-dns-operator
+      containers:
+      - name: operator
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "Mock DNS Operator starting..."
+          while true; do
+            # Mark all DNSZones as ready
+            for zone in $(kubectl get dnszones --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+              ns=$(echo $zone | cut -d/ -f1)
+              name=$(echo $zone | cut -d/ -f2)
+              kubectl patch dnszone $name -n $ns --type=merge --subresource=status -p '{"status":{"ready":true,"message":"Mock operator - zone ready"}}'
+            done
+            # Mark all DNSRecordSets as ready
+            for rs in $(kubectl get dnsrecordsets --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+              ns=$(echo $rs | cut -d/ -f1)
+              name=$(echo $rs | cut -d/ -f2)
+              kubectl patch dnsrecordset $name -n $ns --type=merge --subresource=status -p '{"status":{"ready":true,"message":"Mock operator - record ready"}}'
+            done
+            sleep 10
+          done

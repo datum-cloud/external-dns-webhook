@@ -1,0 +1,27 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: datum-dns-webhook
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["dns.datum.net"]
+  resources: ["dnszones"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["dns.datum.net"]
+  resources: ["dnsrecordsets"]
+  verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: datum-dns-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: datum-dns-webhook
+subjects:
+- kind: ServiceAccount
+  name: datum-dns-webhook
+  namespace: external-dns

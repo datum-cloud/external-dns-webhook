@@ -1,0 +1,21 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Configuration
+metadata:
+  name: datum-dns-webhook-e2e
+spec:
+  # Global timeout for assertions
+  timeouts:
+    apply: 30s
+    assert: 2m
+    delete: 30s
+    error: 30s
+    exec: 30s
+
+  # Report format
+  reportFormat: JSON
+
+  # Skip resource cleanup (resources are managed by Taskfile)
+  skipDelete: true
+
+  # Full diff output on failure
+  fullName: false

@@ -1,0 +1,169 @@
+version: '3'
+
+includes:
+  # Remote include from test-infra
+  # Can be overridden with TASKFILE_TESTINFRA_PATH environment variable
+  test-infra:
+    taskfile: '{{default "https://raw.githubusercontent.com/datumforge/test-infra/main/Taskfile.yml" .TASKFILE_TESTINFRA_PATH}}'
+    internal: true  # Hide test-infra tasks from `task --list`
+
+vars:
+  CLUSTER_NAME: datum-dns-webhook-e2e
+  KUBECONFIG: "{{.HOME}}/.kube/{{.CLUSTER_NAME}}.kubeconfig"
+  IMAGE_NAME: datum-dns-webhook:e2e-test
+
+tasks:
+  # High-level orchestration tasks
+  dev:setup:
+    desc: Create complete E2E environment for interactive development
+    cmds:
+      - task: test-infra:kind:create
+        vars:
+          CLUSTER_NAME: '{{.CLUSTER_NAME}}'
+          KUBECONFIG: '{{.KUBECONFIG}}'
+      - task: test-infra:flux:install
+        vars:
+          KUBECONFIG: '{{.KUBECONFIG}}'
+      - task: test-infra:infra:deploy
+        vars:
+          KUBECONFIG: '{{.KUBECONFIG}}'
+      - task: e2e:build
+      - task: e2e:deploy
+      - cmd: |
+          echo ""
+          echo "✓ E2E environment ready!"
+          echo ""
+          echo "Export KUBECONFIG:"
+          echo "  export KUBECONFIG={{.KUBECONFIG}}"
+          echo ""
+          echo "Useful commands:"
+          echo "  task test:e2e      # Run E2E tests"
+          echo "  task e2e:logs      # View component logs"
+          echo "  task e2e:diag      # Collect diagnostics"
+          echo "  task e2e:cleanup   # Destroy environment"
+        silent: true
+
+  test:e2e:
+    desc: Run E2E tests (requires environment from dev:setup)
+    cmds:
+      - task: e2e:test:chainsaw
+
+  ci:e2e:
+    desc: Run full E2E suite in CI (setup + test + cleanup on failure)
+    cmds:
+      - task: dev:setup
+      - task: test:e2e
+      - defer: {task: e2e:diag:on-failure}
+
+  # Component-specific tasks (e2e namespace)
+  e2e:build:
+    desc: Build and load webhook image into KIND
+    dir: .
+    cmds:
+      - docker build -t {{.IMAGE_NAME}} .
+      - kind load docker-image {{.IMAGE_NAME}} --name {{.CLUSTER_NAME}}
+
+  e2e:deploy:
+    desc: Deploy DNS operator, fixtures, webhook, and test app
+    vars:
+      KUBECONFIG: '{{.KUBECONFIG}}'
+    cmds:
+      - cmd: echo "Deploying DNS operator (mock)..."
+        silent: true
+      - kubectl apply -k config/overlays/test/dns-operator/
+      - kubectl wait --for=condition=available --timeout=300s -n dns-operator-system deployment/mock-dns-operator
+
+      - cmd: echo "Deploying DNS fixtures..."
+        silent: true
+      - kubectl apply -k config/overlays/test/dns-fixtures/
+
+      - cmd: echo "Deploying ExternalDNS via Flux HelmRelease..."
+        silent: true
+      - kubectl apply -k config/dependencies/external-dns/
+      - flux reconcile helmrelease external-dns -n external-dns --timeout=5m
+      - kubectl wait --for=condition=available --timeout=300s -n external-dns deployment/external-dns
+
+      - cmd: echo "Deploying webhook + test application..."
+        silent: true
+      - kubectl apply -k config/overlays/test/
+      - kubectl wait --for=condition=available --timeout=300s -n external-dns deployment/datum-dns-webhook
+      - kubectl wait --for=condition=available --timeout=300s -n default deployment/whoami
+
+  e2e:test:chainsaw:
+    desc: Run Chainsaw E2E tests
+    vars:
+      KUBECONFIG: '{{.KUBECONFIG}}'
+    cmds:
+      - chainsaw test --test-dir e2e/chainsaw --config e2e/chainsaw/chainsaw-config.yaml
+
+  e2e:logs:
+    desc: Show logs from key components
+    vars:
+      KUBECONFIG: '{{.KUBECONFIG}}'
+    cmds:
+      - cmd: echo "=== Webhook Logs ===" && echo ""
+        silent: true
+      - kubectl logs -n external-dns -l app=datum-dns-webhook --tail=50
+      - cmd: echo "" && echo "=== ExternalDNS Logs ===" && echo ""
+        silent: true
+      - kubectl logs -n external-dns -l app=external-dns --tail=50
+
+  e2e:diag:
+    desc: Collect full diagnostics
+    vars:
+      KUBECONFIG: '{{.KUBECONFIG}}'
+    dir: e2e
+    cmds:
+      - bash scripts/diagnostics.sh
+
+  e2e:diag:on-failure:
+    desc: Collect diagnostics only if previous task failed
+    vars:
+      KUBECONFIG: '{{.KUBECONFIG}}'
+    dir: e2e
+    cmds:
+      - cmd: |
+          if [ "{{.TASK_EXIT_CODE}}" != "0" ]; then
+            echo "Test failed, collecting diagnostics..."
+            bash scripts/diagnostics.sh
+          fi
+    ignore_error: true
+
+  e2e:cleanup:
+    desc: Delete KIND cluster and kubeconfig
+    cmds:
+      - kind delete cluster --name {{.CLUSTER_NAME}}
+      - rm -f {{.KUBECONFIG}}
+
+  # Existing build/test tasks (preserved)
+  build:
+    desc: Build datum-dns-webhook binary
+    cmds:
+      - mkdir -p bin
+      - go build -o bin/datum-dns-webhook .
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - bin/datum-dns-webhook
+
+  test:
+    desc: Run unit tests with race detection
+    cmds:
+      - go test -v -race ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  docker:
+    desc: Build Docker image
+    cmds:
+      - docker build -t datum-dns-webhook:latest .
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf bin/

@@ -1,0 +1,6 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# DNS fixtures (DNSZone, DNSZoneClass) for E2E testing
+resources:
+- ../../../../e2e/manifests/dns-fixtures

@@ -1,0 +1,29 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: external-dns
+  namespace: external-dns
+spec:
+  interval: 5m
+  chart:
+    spec:
+      chart: external-dns
+      version: '>=1.15.0'
+      sourceRef:
+        kind: HelmRepository
+        name: external-dns
+        namespace: flux-system
+      interval: 1h
+  install:
+    createNamespace: true
+  values:
+    sources:
+      - gateway-httproute
+    provider:
+      name: webhook
+      webhook:
+        url: http://datum-dns-webhook.external-dns.svc.cluster.local:8888
+    extraArgs:
+      - --txt-owner-id=external-dns-e2e
+      - --log-level=debug
+    interval: 30s

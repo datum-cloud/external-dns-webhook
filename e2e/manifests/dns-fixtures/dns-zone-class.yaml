@@ -1,0 +1,8 @@
+apiVersion: dns.networking.miloapis.com/v1alpha1
+kind: DNSZoneClass
+metadata:
+  name: cloudflare-test
+spec:
+  provider: cloudflare
+  config:
+    apiToken: "mock-token-for-testing"

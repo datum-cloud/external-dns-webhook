@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: datum-dns-webhook
+  namespace: external-dns
+spec:
+  selector:
+    app: datum-dns-webhook
+  ports:
+  - name: webhook
+    port: 8888
+    targetPort: 8888
+  - name: metrics
+    port: 8080
+    targetPort: 8080

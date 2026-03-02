@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datum-dns-webhook
+  namespace: external-dns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datum-dns-webhook
+  template:
+    metadata:
+      labels:
+        app: datum-dns-webhook
+    spec:
+      serviceAccountName: datum-dns-webhook
+      containers:
+      - name: webhook
+        image: datum-dns-webhook:e2e-test  # Loaded from local build
+        imagePullPolicy: Never
+        args:
+        - --owner-id=external-dns-e2e
+        - --log-level=debug
+        - --port=8888
+        - --metrics-port=8080
+        ports:
+        - name: webhook
+          containerPort: 8888
+        - name: metrics
+          containerPort: 8080
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
