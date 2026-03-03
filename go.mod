@@ -6,7 +6,7 @@ require (
 	github.com/prometheus/client_golang v1.23.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
-	go.miloapis.com/dns-operator v0.0.0
+	go.miloapis.com/dns-operator v0.5.1
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
@@ -66,5 +66,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-replace go.miloapis.com/dns-operator => /Users/scotwells/repos/dns-operator

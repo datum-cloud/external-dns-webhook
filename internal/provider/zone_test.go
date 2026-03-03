@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -14,136 +15,112 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func TestZoneWatcher_Refresh(t *testing.T) {
+func newTestSource(t *testing.T, name string, cfg ZoneSourceConfig, objects ...runtime.Object) *ZoneSource {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, dnsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRuntimeObjects(objects...).
+		Build()
+
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+
+	return NewZoneSource(name, fakeClient, cfg, &Config{}, logger)
+}
+
+func TestZoneSource_Refresh(t *testing.T) {
 	tests := []struct {
-		name      string
-		zones     []dnsv1alpha1.DNSZone
-		namespace string
-		config    *Config
-		validate  func(t *testing.T, watcher *ZoneWatcher)
-		wantErr   bool
+		name     string
+		zones    []dnsv1alpha1.DNSZone
+		config   ZoneSourceConfig
+		validate func(t *testing.T, src *ZoneSource)
+		wantErr  bool
 	}{
 		{
 			name: "single DNSZone discovered adds to cache",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 			},
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
-			validate: func(t *testing.T, watcher *ZoneWatcher) {
-				assert.Len(t, watcher.cache, 1)
-				zone, ok := watcher.cache["example.com"]
+			config: ZoneSourceConfig{},
+			validate: func(t *testing.T, src *ZoneSource) {
+				zones := src.GetZones()
+				assert.Len(t, zones, 1)
+				zone, ok := zones["example.com"]
 				assert.True(t, ok)
 				assert.Equal(t, "example-com", zone.Name)
 			},
 		},
 		{
-			name: "multiple DNSZones in different namespaces all discovered (cluster-wide mode)",
+			name: "multiple DNSZones in different namespaces all discovered",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "namespace1",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "namespace1"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-org",
-						Namespace: "namespace2",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.org",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-org", Namespace: "namespace2"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.org"},
 				},
 			},
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
-			validate: func(t *testing.T, watcher *ZoneWatcher) {
-				assert.Len(t, watcher.cache, 2)
-				_, ok1 := watcher.cache["example.com"]
-				_, ok2 := watcher.cache["example.org"]
+			config: ZoneSourceConfig{},
+			validate: func(t *testing.T, src *ZoneSource) {
+				zones := src.GetZones()
+				assert.Len(t, zones, 2)
+				_, ok1 := zones["example.com"]
+				_, ok2 := zones["example.org"]
 				assert.True(t, ok1)
 				assert.True(t, ok2)
 			},
 		},
 		{
-			name: "single namespace mode only discovers zones in that namespace",
+			name: "namespace set: only discovers zones in that namespace",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "namespace1",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "namespace1"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-org",
-						Namespace: "namespace2",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.org",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-org", Namespace: "namespace2"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.org"},
 				},
 			},
-			config: &Config{
-				WatchMode: NamespaceWatchModeSpecific,
-				Namespace: "namespace1",
-			},
-			validate: func(t *testing.T, watcher *ZoneWatcher) {
-				assert.Len(t, watcher.cache, 1)
-				zone, ok := watcher.cache["example.com"]
+			config: ZoneSourceConfig{Namespace: "namespace1"},
+			validate: func(t *testing.T, src *ZoneSource) {
+				zones := src.GetZones()
+				assert.Len(t, zones, 1)
+				zone, ok := zones["example.com"]
 				assert.True(t, ok)
 				assert.Equal(t, "namespace1", zone.Namespace)
-				_, ok2 := watcher.cache["example.org"]
-				assert.False(t, ok2)
 			},
 		},
 		{
-			name: "empty zones produces empty cache",
-			zones: []dnsv1alpha1.DNSZone{},
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
-			validate: func(t *testing.T, watcher *ZoneWatcher) {
-				assert.Len(t, watcher.cache, 0)
+			name:   "empty zones produces empty cache",
+			zones:  []dnsv1alpha1.DNSZone{},
+			config: ZoneSourceConfig{},
+			validate: func(t *testing.T, src *ZoneSource) {
+				assert.Len(t, src.GetZones(), 0)
 			},
 		},
 		{
 			name: "zone domain with trailing dot is normalized",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com.",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com."},
 				},
 			},
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
-			validate: func(t *testing.T, watcher *ZoneWatcher) {
-				assert.Len(t, watcher.cache, 1)
-				// Should be stored without trailing dot
-				zone, ok := watcher.cache["example.com"]
+			config: ZoneSourceConfig{},
+			validate: func(t *testing.T, src *ZoneSource) {
+				zones := src.GetZones()
+				assert.Len(t, zones, 1)
+				zone, ok := zones["example.com"]
 				assert.True(t, ok)
 				assert.Equal(t, "example-com", zone.Name)
 			},
@@ -154,132 +131,82 @@ func TestZoneWatcher_Refresh(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 
-			// Create scheme and add types
-			scheme := runtime.NewScheme()
-			err := dnsv1alpha1.AddToScheme(scheme)
-			require.NoError(t, err)
-			err = corev1.AddToScheme(scheme)
-			require.NoError(t, err)
-
-			// Create namespaces for the test
 			objects := []runtime.Object{}
 			namespaceNames := map[string]bool{}
 			for _, zone := range tt.zones {
-				namespaceNames[zone.Namespace] = true
-				objects = append(objects, &zone)
+				z := zone
+				namespaceNames[z.Namespace] = true
+				objects = append(objects, &z)
 			}
 			for ns := range namespaceNames {
-				objects = append(objects, &corev1.Namespace{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: ns,
-					},
-				})
+				objects = append(objects, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})
 			}
 
-			// Create fake client
-			client := fake.NewClientBuilder().
-				WithScheme(scheme).
-				WithRuntimeObjects(objects...).
-				Build()
-
-			logger := logrus.New()
-			logger.SetLevel(logrus.ErrorLevel) // Reduce noise in tests
-
-			watcher := NewZoneWatcher(client, tt.config, logger)
-
-			err = watcher.refresh(ctx)
+			src := newTestSource(t, "test", tt.config, objects...)
+			err := src.Refresh(ctx)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
 			}
-
 			require.NoError(t, err)
 			if tt.validate != nil {
-				tt.validate(t, watcher)
+				tt.validate(t, src)
 			}
 		})
 	}
 }
 
-func TestZoneWatcher_GetZoneForDomain(t *testing.T) {
+func TestZoneRegistry_GetZoneForDomain(t *testing.T) {
 	tests := []struct {
-		name       string
-		zones      []dnsv1alpha1.DNSZone
-		domain     string
-		wantZone   string
-		wantErr    bool
+		name     string
+		zones    []dnsv1alpha1.DNSZone
+		domain   string
+		wantZone string
+		wantErr  bool
 	}{
 		{
 			name: "exact match",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 			},
 			domain:   "example.com",
 			wantZone: "example-com",
-			wantErr:  false,
 		},
 		{
 			name: "subdomain finds zone",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 			},
 			domain:   "app.example.com",
 			wantZone: "example-com",
-			wantErr:  false,
 		},
 		{
-			name: "longest suffix match (sub.example.com vs example.com)",
+			name: "longest suffix match",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "sub-example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "sub.example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "sub-example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "sub.example.com"},
 				},
 			},
 			domain:   "app.sub.example.com",
 			wantZone: "sub-example-com",
-			wantErr:  false,
 		},
 		{
 			name: "unknown domain returns error",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 			},
 			domain:  "unknown.org",
@@ -295,18 +222,12 @@ func TestZoneWatcher_GetZoneForDomain(t *testing.T) {
 			name: "domain with trailing dot is normalized",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 			},
 			domain:   "app.example.com.",
 			wantZone: "example-com",
-			wantErr:  false,
 		},
 	}
 
@@ -314,52 +235,38 @@ func TestZoneWatcher_GetZoneForDomain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 
-			// Create scheme
-			scheme := runtime.NewScheme()
-			err := dnsv1alpha1.AddToScheme(scheme)
-			require.NoError(t, err)
-			err = corev1.AddToScheme(scheme)
-			require.NoError(t, err)
-
-			// Create objects
-			objects := []runtime.Object{}
+			objects := []runtime.Object{
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+			}
 			for _, zone := range tt.zones {
 				z := zone
 				objects = append(objects, &z)
 			}
-			objects = append(objects, &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "default",
-				},
-			})
 
-			client := fake.NewClientBuilder().
-				WithScheme(scheme).
-				WithRuntimeObjects(objects...).
-				Build()
+			src := newTestSource(t, "test", ZoneSourceConfig{}, objects...)
+			require.NoError(t, src.Refresh(ctx))
 
 			logger := logrus.New()
 			logger.SetLevel(logrus.ErrorLevel)
 
-			watcher := NewZoneWatcher(client, &Config{WatchMode: NamespaceWatchModeAll}, logger)
-			err = watcher.refresh(ctx)
-			require.NoError(t, err)
+			registry := NewZoneRegistry([]*ZoneSource{src}, logger)
 
-			zone, err := watcher.GetZoneForDomain(tt.domain)
+			match, err := registry.GetZoneForDomain(tt.domain)
 			if tt.wantErr {
 				assert.Error(t, err)
-				assert.Nil(t, zone)
+				assert.Nil(t, match)
 				return
 			}
 
 			require.NoError(t, err)
-			require.NotNil(t, zone)
-			assert.Equal(t, tt.wantZone, zone.Name)
+			require.NotNil(t, match)
+			assert.Equal(t, tt.wantZone, match.Zone.Name)
+			assert.Equal(t, "test", match.Source.Name())
 		})
 	}
 }
 
-func TestZoneWatcher_GetDomainFilter(t *testing.T) {
+func TestZoneRegistry_GetDomainFilter(t *testing.T) {
 	tests := []struct {
 		name   string
 		zones  []dnsv1alpha1.DNSZone
@@ -369,13 +276,8 @@ func TestZoneWatcher_GetDomainFilter(t *testing.T) {
 			name: "single zone",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 			},
 			expect: []string{"example.com"},
@@ -384,22 +286,12 @@ func TestZoneWatcher_GetDomainFilter(t *testing.T) {
 			name: "multiple zones",
 			zones: []dnsv1alpha1.DNSZone{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-org",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.org",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-org", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.org"},
 				},
 			},
 			expect: []string{"example.com", "example.org"},
@@ -415,117 +307,129 @@ func TestZoneWatcher_GetDomainFilter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 
-			scheme := runtime.NewScheme()
-			err := dnsv1alpha1.AddToScheme(scheme)
-			require.NoError(t, err)
-			err = corev1.AddToScheme(scheme)
-			require.NoError(t, err)
-
 			objects := []runtime.Object{
-				&corev1.Namespace{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "default",
-					},
-				},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
 			}
 			for _, zone := range tt.zones {
 				z := zone
 				objects = append(objects, &z)
 			}
 
-			client := fake.NewClientBuilder().
-				WithScheme(scheme).
-				WithRuntimeObjects(objects...).
-				Build()
+			src := newTestSource(t, "test", ZoneSourceConfig{}, objects...)
+			require.NoError(t, src.Refresh(ctx))
 
 			logger := logrus.New()
 			logger.SetLevel(logrus.ErrorLevel)
 
-			watcher := NewZoneWatcher(client, &Config{WatchMode: NamespaceWatchModeAll}, logger)
-			err = watcher.refresh(ctx)
-			require.NoError(t, err)
-
-			filter := watcher.GetDomainFilter()
+			registry := NewZoneRegistry([]*ZoneSource{src}, logger)
+			filter := registry.GetDomainFilter()
 			require.NotNil(t, filter)
 
-			// Verify the filter contains all expected domains
 			for _, domain := range tt.expect {
-				// Create a test endpoint to check if it matches the filter
 				testEndpoint := "test." + domain
-				matches := filter.Match(testEndpoint)
-				assert.True(t, matches, "Domain filter should match %s", testEndpoint)
+				assert.True(t, filter.Match(testEndpoint), "Domain filter should match %s", testEndpoint)
 			}
 		})
 	}
 }
 
-func TestZoneWatcher_LabeledNamespaceMode(t *testing.T) {
+func TestZoneSource_LabeledNamespaceMode(t *testing.T) {
 	ctx := context.Background()
 
-	scheme := runtime.NewScheme()
-	err := dnsv1alpha1.AddToScheme(scheme)
-	require.NoError(t, err)
-	err = corev1.AddToScheme(scheme)
-	require.NoError(t, err)
-
-	// Create namespaces with labels
 	objects := []runtime.Object{
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "labeled-ns",
-				Labels: map[string]string{
-					"dns": "enabled",
-				},
+				Name:   "labeled-ns",
+				Labels: map[string]string{"dns": "enabled"},
 			},
 		},
-		&corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "unlabeled-ns",
-			},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "unlabeled-ns"}},
+		&dnsv1alpha1.DNSZone{
+			ObjectMeta: metav1.ObjectMeta{Name: "zone-in-labeled", Namespace: "labeled-ns"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "labeled.example.com"},
 		},
 		&dnsv1alpha1.DNSZone{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "zone-in-labeled",
-				Namespace: "labeled-ns",
-			},
-			Spec: dnsv1alpha1.DNSZoneSpec{
-				DomainName: "labeled.example.com",
-			},
-		},
-		&dnsv1alpha1.DNSZone{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "zone-in-unlabeled",
-				Namespace: "unlabeled-ns",
-			},
-			Spec: dnsv1alpha1.DNSZoneSpec{
-				DomainName: "unlabeled.example.com",
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: "zone-in-unlabeled", Namespace: "unlabeled-ns"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "unlabeled.example.com"},
 		},
 	}
 
-	client := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithRuntimeObjects(objects...).
-		Build()
+	src := newTestSource(t, "test", ZoneSourceConfig{
+		NamespaceLabelSelector: "dns=enabled",
+	}, objects...)
+
+	require.NoError(t, src.Refresh(ctx))
+
+	zones := src.GetZones()
+	assert.Len(t, zones, 1)
+	zone, ok := zones["labeled.example.com"]
+	assert.True(t, ok)
+	assert.Equal(t, "labeled-ns", zone.Namespace)
+	_, ok = zones["unlabeled.example.com"]
+	assert.False(t, ok)
+}
+
+func TestZoneRegistry_MultiSourceRouting(t *testing.T) {
+	ctx := context.Background()
+
+	objects1 := []runtime.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&dnsv1alpha1.DNSZone{
+			ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
+		},
+	}
+	src1 := newTestSource(t, "cluster-a", ZoneSourceConfig{}, objects1...)
+	require.NoError(t, src1.Refresh(ctx))
+
+	objects2 := []runtime.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&dnsv1alpha1.DNSZone{
+			ObjectMeta: metav1.ObjectMeta{Name: "example-org", Namespace: "default"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.org"},
+		},
+	}
+	src2 := newTestSource(t, "cluster-b", ZoneSourceConfig{}, objects2...)
+	require.NoError(t, src2.Refresh(ctx))
 
 	logger := logrus.New()
 	logger.SetLevel(logrus.ErrorLevel)
 
-	config := &Config{
-		WatchMode:              NamespaceWatchModeLabeled,
-		NamespaceLabelSelector: "dns=enabled",
-	}
+	registry := NewZoneRegistry([]*ZoneSource{src1, src2}, logger)
 
-	watcher := NewZoneWatcher(client, config, logger)
-	err = watcher.refresh(ctx)
-	require.NoError(t, err)
+	t.Run("routes to correct source for example.com", func(t *testing.T) {
+		match, err := registry.GetZoneForDomain("app.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, "cluster-a", match.Source.Name())
+		assert.Equal(t, "example-com", match.Zone.Name)
+	})
 
-	// Should only discover zone in labeled namespace
-	assert.Len(t, watcher.cache, 1)
-	zone, ok := watcher.cache["labeled.example.com"]
-	assert.True(t, ok)
-	assert.Equal(t, "labeled-ns", zone.Namespace)
+	t.Run("routes to correct source for example.org", func(t *testing.T) {
+		match, err := registry.GetZoneForDomain("app.example.org")
+		require.NoError(t, err)
+		assert.Equal(t, "cluster-b", match.Source.Name())
+		assert.Equal(t, "example-org", match.Zone.Name)
+	})
 
-	_, ok = watcher.cache["unlabeled.example.com"]
-	assert.False(t, ok)
+	t.Run("domain filter includes both sources", func(t *testing.T) {
+		filter := registry.GetDomainFilter()
+		assert.True(t, filter.Match("app.example.com"))
+		assert.True(t, filter.Match("app.example.org"))
+		assert.False(t, filter.Match("app.unknown.net"))
+	})
+
+	t.Run("list zones returns zones from all sources", func(t *testing.T) {
+		zones := registry.ListZones()
+		assert.Len(t, zones, 2)
+	})
+}
+
+func TestZoneSource_RefreshInterval(t *testing.T) {
+	src := newTestSource(t, "test", ZoneSourceConfig{
+		RefreshInterval: 100 * time.Millisecond,
+	},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+	)
+
+	assert.Equal(t, 100*time.Millisecond, src.config.RefreshInterval)
 }

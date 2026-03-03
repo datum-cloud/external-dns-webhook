@@ -3,6 +3,4 @@ kind: DNSZoneClass
 metadata:
   name: cloudflare-test
 spec:
-  provider: cloudflare
-  config:
-    apiToken: "mock-token-for-testing"
+  controllerName: mock-e2e-controller

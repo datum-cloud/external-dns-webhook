@@ -4,29 +4,25 @@ includes:
   # Remote include from test-infra
   # Can be overridden with TASKFILE_TESTINFRA_PATH environment variable
   test-infra:
-    taskfile: '{{default "https://raw.githubusercontent.com/datumforge/test-infra/main/Taskfile.yml" .TASKFILE_TESTINFRA_PATH}}'
+    taskfile: '{{default "https://raw.githubusercontent.com/datum-cloud/test-infra/main/Taskfile.yml" .TASKFILE_TESTINFRA_PATH}}'
     internal: true  # Hide test-infra tasks from `task --list`
 
 vars:
-  CLUSTER_NAME: datum-dns-webhook-e2e
-  KUBECONFIG: "{{.HOME}}/.kube/{{.CLUSTER_NAME}}.kubeconfig"
+  CLUSTER_NAME: test-infra
+  KUBECONFIG: "{{.ROOT_DIR}}/.test-infra/kubeconfig"
   IMAGE_NAME: datum-dns-webhook:e2e-test
+
+env:
+  KUBECONFIG: "{{.KUBECONFIG}}"
 
 tasks:
   # High-level orchestration tasks
   dev:setup:
     desc: Create complete E2E environment for interactive development
     cmds:
-      - task: test-infra:kind:create
+      - task: test-infra:cluster-up
         vars:
           CLUSTER_NAME: '{{.CLUSTER_NAME}}'
-          KUBECONFIG: '{{.KUBECONFIG}}'
-      - task: test-infra:flux:install
-        vars:
-          KUBECONFIG: '{{.KUBECONFIG}}'
-      - task: test-infra:infra:deploy
-        vars:
-          KUBECONFIG: '{{.KUBECONFIG}}'
       - task: e2e:build
       - task: e2e:deploy
       - cmd: |
@@ -76,6 +72,10 @@ tasks:
       - cmd: echo "Deploying DNS fixtures..."
         silent: true
       - kubectl apply -k config/overlays/test/dns-fixtures/
+
+      - cmd: echo "Installing ExternalDNS DNSEndpoint CRD..."
+        silent: true
+      - kubectl apply --server-side -f https://raw.githubusercontent.com/kubernetes-sigs/external-dns/master/config/crd/standard/dnsendpoints.externaldns.k8s.io.yaml
 
       - cmd: echo "Deploying ExternalDNS via Flux HelmRelease..."
         silent: true

@@ -6,7 +6,6 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	dnsv1alpha1 "go.miloapis.com/dns-operator/api/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,7 +24,8 @@ const (
 	ManagedByValue = "datum-cloud-webhook"
 )
 
-// RecordSetManager handles DNSRecordSet CRUD operations.
+// RecordSetManager handles DNSRecordSet CRUD operations against a single
+// control plane's API server.
 type RecordSetManager struct {
 	client client.Client
 	config *Config
@@ -42,60 +42,45 @@ func NewRecordSetManager(client client.Client, config *Config, logger *log.Logge
 }
 
 // List retrieves all DNSRecordSet resources owned by the given owner ID.
+// It searches across all namespaces visible to this manager's client.
 func (m *RecordSetManager) List(ctx context.Context, ownerID string) ([]*dnsv1alpha1.DNSRecordSet, error) {
 	m.logger.Debugf("Listing DNS record sets for owner: %s", ownerID)
 
-	// Get namespaces to search based on configuration
-	namespaces, err := m.getNamespaces(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get namespaces: %w", err)
+	var recordSets dnsv1alpha1.DNSRecordSetList
+	listOpts := []client.ListOption{
+		client.MatchingLabels{
+			LabelOwner:     ownerID,
+			LabelManagedBy: ManagedByValue,
+		},
 	}
 
-	var allRecordSets []*dnsv1alpha1.DNSRecordSet
+	if err := m.client.List(ctx, &recordSets, listOpts...); err != nil {
+		return nil, fmt.Errorf("failed to list DNS record sets: %w", err)
+	}
 
-	// Track recordsets per namespace and type for metrics
+	result := make([]*dnsv1alpha1.DNSRecordSet, 0, len(recordSets.Items))
 	recordsetsByNamespaceAndType := make(map[string]map[string]int)
 
-	for _, ns := range namespaces {
-		var recordSets dnsv1alpha1.DNSRecordSetList
-		listOpts := []client.ListOption{
-			client.InNamespace(ns),
-			client.MatchingLabels{
-				LabelOwner:     ownerID,
-				LabelManagedBy: ManagedByValue,
-			},
-		}
+	for i := range recordSets.Items {
+		rs := &recordSets.Items[i]
+		result = append(result, rs)
 
-		if err := m.client.List(ctx, &recordSets, listOpts...); err != nil {
-			m.logger.Errorf("Failed to list record sets in namespace %s: %v", ns, err)
-			continue
-		}
-
-		// Initialize namespace map if needed
+		ns := rs.Namespace
 		if recordsetsByNamespaceAndType[ns] == nil {
 			recordsetsByNamespaceAndType[ns] = make(map[string]int)
 		}
-
-		for i := range recordSets.Items {
-			rs := &recordSets.Items[i]
-			allRecordSets = append(allRecordSets, rs)
-
-			// Count by record type
-			recordType := string(rs.Spec.RecordType)
-			recordsetsByNamespaceAndType[ns][recordType]++
-		}
+		recordsetsByNamespaceAndType[ns][string(rs.Spec.RecordType)]++
 	}
 
-	m.logger.Debugf("Found %d DNS record sets", len(allRecordSets))
+	m.logger.Debugf("Found %d DNS record sets", len(result))
 
-	// Record metrics for recordsets managed per namespace and type
 	for ns, typeMap := range recordsetsByNamespaceAndType {
 		for recordType, count := range typeMap {
 			RecordRecordsetsManaged(ns, recordType, count)
 		}
 	}
 
-	return allRecordSets, nil
+	return result, nil
 }
 
 // Create creates a new DNSRecordSet resource.
@@ -108,7 +93,6 @@ func (m *RecordSetManager) Create(ctx context.Context, rs *dnsv1alpha1.DNSRecord
 		return nil
 	}
 
-	// Set TypeMeta
 	rs.TypeMeta = metav1.TypeMeta{
 		APIVersion: "dns.networking.miloapis.com/v1alpha1",
 		Kind:       "DNSRecordSet",
@@ -181,57 +165,4 @@ func (m *RecordSetManager) Get(ctx context.Context, name, namespace string) (*dn
 	}
 
 	return &rs, nil
-}
-
-// getNamespaces returns the list of namespaces to search based on configuration.
-func (m *RecordSetManager) getNamespaces(ctx context.Context) ([]string, error) {
-	switch m.config.WatchMode {
-	case NamespaceWatchModeSpecific:
-		if m.config.Namespace == "" {
-			return nil, fmt.Errorf("specific namespace mode requires namespace to be set")
-		}
-		return []string{m.config.Namespace}, nil
-
-	case NamespaceWatchModeLabeled:
-		if m.config.NamespaceLabelSelector == "" {
-			return nil, fmt.Errorf("labeled namespace mode requires label selector to be set")
-		}
-
-		// Parse and use label selector
-		labelSelector, err := metav1.ParseToLabelSelector(m.config.NamespaceLabelSelector)
-		if err != nil {
-			return nil, fmt.Errorf("invalid label selector: %w", err)
-		}
-
-		selector, err := metav1.LabelSelectorAsSelector(labelSelector)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert label selector: %w", err)
-		}
-
-		var namespaceList corev1.NamespaceList
-		if err := m.client.List(ctx, &namespaceList, client.MatchingLabelsSelector{Selector: selector}); err != nil {
-			return nil, fmt.Errorf("failed to list namespaces: %w", err)
-		}
-
-		namespaces := make([]string, 0, len(namespaceList.Items))
-		for _, ns := range namespaceList.Items {
-			namespaces = append(namespaces, ns.Name)
-		}
-		return namespaces, nil
-
-	case NamespaceWatchModeAll:
-		var namespaceList corev1.NamespaceList
-		if err := m.client.List(ctx, &namespaceList); err != nil {
-			return nil, fmt.Errorf("failed to list namespaces: %w", err)
-		}
-
-		namespaces := make([]string, 0, len(namespaceList.Items))
-		for _, ns := range namespaceList.Items {
-			namespaces = append(namespaces, ns.Name)
-		}
-		return namespaces, nil
-
-	default:
-		return nil, fmt.Errorf("unknown namespace watch mode: %d", m.config.WatchMode)
-	}
 }

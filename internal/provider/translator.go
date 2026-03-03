@@ -231,22 +231,22 @@ func extractTarget(entry *dnsv1alpha1.RecordEntry, recordType string) (string, e
 	switch recordType {
 	case "A":
 		if entry.A == nil {
-			return "", fmt.Errorf("A record entry missing A spec")
+			return "", fmt.Errorf("a record entry missing A spec")
 		}
 		return entry.A.Content, nil
 	case "AAAA":
 		if entry.AAAA == nil {
-			return "", fmt.Errorf("AAAA record entry missing AAAA spec")
+			return "", fmt.Errorf("aaaa record entry missing AAAA spec")
 		}
 		return entry.AAAA.Content, nil
 	case "CNAME":
 		if entry.CNAME == nil {
-			return "", fmt.Errorf("CNAME record entry missing CNAME spec")
+			return "", fmt.Errorf("cname record entry missing CNAME spec")
 		}
 		return entry.CNAME.Content, nil
 	case "TXT":
 		if entry.TXT == nil {
-			return "", fmt.Errorf("TXT record entry missing TXT spec")
+			return "", fmt.Errorf("txt record entry missing TXT spec")
 		}
 		return entry.TXT.Content, nil
 	default:

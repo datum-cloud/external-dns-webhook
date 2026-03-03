@@ -11,10 +11,10 @@ kind: ClusterRole
 metadata:
   name: mock-dns-operator
 rules:
-- apiGroups: ["dns.datum.net"]
+- apiGroups: ["dns.networking.miloapis.com"]
   resources: ["dnszones", "dnsrecordsets", "dnszoneclasses"]
   verbs: ["get", "list", "watch", "update", "patch"]
-- apiGroups: ["dns.datum.net"]
+- apiGroups: ["dns.networking.miloapis.com"]
   resources: ["dnszones/status", "dnsrecordsets/status", "dnszoneclasses/status"]
   verbs: ["update", "patch"]
 ---
@@ -56,18 +56,21 @@ spec:
         - |
           set -e
           echo "Mock DNS Operator starting..."
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          CONDITION_ACCEPTED='{"type":"Accepted","status":"True","reason":"Accepted","message":"Mock operator","lastTransitionTime":"'$NOW'","observedGeneration":1}'
+          CONDITION_PROGRAMMED='{"type":"Programmed","status":"True","reason":"Programmed","message":"Mock operator","lastTransitionTime":"'$NOW'","observedGeneration":1}'
           while true; do
-            # Mark all DNSZones as ready
-            for zone in $(kubectl get dnszones --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+            for zone in $(kubectl get dnszones.dns.networking.miloapis.com --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null); do
               ns=$(echo $zone | cut -d/ -f1)
               name=$(echo $zone | cut -d/ -f2)
-              kubectl patch dnszone $name -n $ns --type=merge --subresource=status -p '{"status":{"ready":true,"message":"Mock operator - zone ready"}}'
+              kubectl patch dnszone.dns.networking.miloapis.com $name -n $ns --type=merge --subresource=status \
+                -p '{"status":{"conditions":['$CONDITION_ACCEPTED','$CONDITION_PROGRAMMED']}}' 2>/dev/null || true
             done
-            # Mark all DNSRecordSets as ready
-            for rs in $(kubectl get dnsrecordsets --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+            for rs in $(kubectl get dnsrecordsets.dns.networking.miloapis.com --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null); do
               ns=$(echo $rs | cut -d/ -f1)
               name=$(echo $rs | cut -d/ -f2)
-              kubectl patch dnsrecordset $name -n $ns --type=merge --subresource=status -p '{"status":{"ready":true,"message":"Mock operator - record ready"}}'
+              kubectl patch dnsrecordset.dns.networking.miloapis.com $name -n $ns --type=merge --subresource=status \
+                -p '{"status":{"conditions":['$CONDITION_ACCEPTED','$CONDITION_PROGRAMMED']}}' 2>/dev/null || true
             done
-            sleep 10
+            sleep 5
           done

@@ -1,12 +1,12 @@
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
-  name: txt-ownership-record
+  name: multiple-routes
 spec:
   description: |
-    Verify that ExternalDNS creates TXT records for ownership tracking alongside A records.
+    Verify that multiple HTTPRoutes each produce their own DNSRecordSet,
+    and deleting them removes all records.
   steps:
-  # Step 1: Verify clean state
   - name: assert-clean-state
     try:
     - error:
@@ -17,19 +17,8 @@ spec:
             namespace: default
             labels:
               external-dns.io/owner: external-dns-e2e
-            name: test-txt-?*
-
-  # Step 2: Create HTTPRoute with test-txt hostname
-  - name: create-httproute
-    try:
-    - apply:
-        file: httproute.yaml
-
-  # Step 3: Assert TXT DNSRecordSet exists (external-dns prefixes TXT ownership with "a-" for A records)
-  - name: assert-txt-record-created
-    try:
-    - assert:
-        timeout: 60s
+            name: alpha-?*
+    - error:
         resource:
           apiVersion: dns.networking.miloapis.com/v1alpha1
           kind: DNSRecordSet
@@ -37,15 +26,16 @@ spec:
             namespace: default
             labels:
               external-dns.io/owner: external-dns-e2e
-          spec:
-            dnsZoneRef:
-              name: example-com
-            recordType: TXT
-            records:
-            - name: a-test-txt
+            name: beta-?*
 
-  # Step 4: Assert A DNSRecordSet also exists
-  - name: assert-a-record-created
+  - name: create-both-routes
+    try:
+    - apply:
+        file: httproute-alpha.yaml
+    - apply:
+        file: httproute-beta.yaml
+
+  - name: assert-alpha-record
     try:
     - assert:
         timeout: 60s
@@ -61,20 +51,42 @@ spec:
               name: example-com
             recordType: A
             records:
-            - name: test-txt
+            - name: alpha
 
-  # Step 5: Cleanup - Delete HTTPRoute
-  - name: cleanup-httproute
+  - name: assert-beta-record
+    try:
+    - assert:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+          spec:
+            dnsZoneRef:
+              name: example-com
+            recordType: A
+            records:
+            - name: beta
+
+  - name: delete-both-routes
     try:
     - delete:
         ref:
           apiVersion: gateway.networking.k8s.io/v1
           kind: HTTPRoute
           namespace: default
-          name: test-txt-httproute
+          name: multi-alpha
+    - delete:
+        ref:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          namespace: default
+          name: multi-beta
 
-  # Step 6: Assert both records are removed
-  - name: assert-records-removed
+  - name: assert-all-records-removed
     try:
     - error:
         timeout: 60s
@@ -85,4 +97,14 @@ spec:
             namespace: default
             labels:
               external-dns.io/owner: external-dns-e2e
-            name: test-txt-?*
+            name: alpha-?*
+    - error:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: beta-?*

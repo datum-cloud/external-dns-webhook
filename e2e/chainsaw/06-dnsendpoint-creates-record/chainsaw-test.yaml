@@ -1,13 +1,13 @@
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
-  name: httproute-creates-record
+  name: dnsendpoint-creates-record
 spec:
   description: |
-    Verify that creating an HTTPRoute with a hostname causes a DNSRecordSet to be created,
-    and that deleting the HTTPRoute removes the DNSRecordSet.
+    Verify that creating a DNSEndpoint CRD causes the webhook to create a
+    corresponding DNSRecordSet, and deleting the DNSEndpoint removes it.
+    This tests the ExternalDNS CRD source alongside the webhook provider.
   steps:
-  # Step 1: Verify clean state - no test DNSRecordSets exist
   - name: assert-clean-state
     try:
     - error:
@@ -18,16 +18,13 @@ spec:
             namespace: default
             labels:
               external-dns.io/owner: external-dns-e2e
-            # Match any DNSRecordSet with test- prefix in name
-            name: test-?*
+            name: endpoint-app-?*
 
-  # Step 2: Create HTTPRoute
-  - name: create-httproute
+  - name: create-dnsendpoint
     try:
     - apply:
-        file: httproute.yaml
+        file: dnsendpoint.yaml
 
-  # Step 3: Assert DNSRecordSet is created with correct spec
   - name: assert-dnsrecordset-created
     try:
     - assert:
@@ -44,19 +41,17 @@ spec:
               name: example-com
             recordType: A
             records:
-            - name: test-app
+            - name: endpoint-app
 
-  # Step 4: Delete HTTPRoute
-  - name: delete-httproute
+  - name: delete-dnsendpoint
     try:
     - delete:
         ref:
-          apiVersion: gateway.networking.k8s.io/v1
-          kind: HTTPRoute
+          apiVersion: externaldns.k8s.io/v1alpha1
+          kind: DNSEndpoint
           namespace: default
-          name: test-httproute
+          name: test-endpoint
 
-  # Step 5: Assert DNSRecordSet is removed
   - name: assert-dnsrecordset-removed
     try:
     - error:
@@ -68,5 +63,4 @@ spec:
             namespace: default
             labels:
               external-dns.io/owner: external-dns-e2e
-            # Match the specific test-app record
-            name: test-?*
+            name: endpoint-app-?*

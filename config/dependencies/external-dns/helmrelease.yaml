@@ -19,11 +19,33 @@ spec:
   values:
     sources:
       - gateway-httproute
+      - crd
     provider:
       name: webhook
       webhook:
-        url: http://datum-dns-webhook.external-dns.svc.cluster.local:8888
-    extraArgs:
-      - --txt-owner-id=external-dns-e2e
-      - --log-level=debug
+        image:
+          repository: datum-dns-webhook
+          tag: e2e-test
+          pullPolicy: Never
+        args:
+          - --owner-id=external-dns-e2e
+          - --log-level=debug
+          - --port=8888
+          - --metrics-port=8080
+    rbac:
+      additionalPermissions:
+        - apiGroups: ["dns.networking.miloapis.com"]
+          resources: ["dnszones"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["dns.networking.miloapis.com"]
+          resources: ["dnsrecordsets"]
+          verbs: ["get", "list", "watch", "create", "update", "delete"]
+        - apiGroups: ["externaldns.k8s.io"]
+          resources: ["dnsendpoints"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["externaldns.k8s.io"]
+          resources: ["dnsendpoints/status"]
+          verbs: ["*"]
+    txtOwnerId: external-dns-e2e
+    logLevel: debug
     interval: 30s

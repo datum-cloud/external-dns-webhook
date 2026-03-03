@@ -1,0 +1,51 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: unknown-domain-filtered
+spec:
+  description: |
+    Verify that an HTTPRoute with a hostname outside any known DNSZone does NOT produce
+    a DNSRecordSet. The webhook's domain filter should reject it.
+  steps:
+  - name: assert-clean-state
+    try:
+    - error:
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: app-unknown-?*
+
+  - name: create-unknown-route
+    try:
+    - apply:
+        file: httproute-unknown.yaml
+
+  - name: wait-for-sync-cycle
+    try:
+    - sleep:
+        duration: 45s
+
+  - name: assert-no-record-created
+    try:
+    - error:
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: app-?*unknown?*
+
+  - name: cleanup
+    try:
+    - delete:
+        ref:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          namespace: default
+          name: route-unknown-domain

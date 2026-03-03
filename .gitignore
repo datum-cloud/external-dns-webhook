@@ -30,5 +30,12 @@ go.work
 .DS_Store
 Thumbs.db
 
+# Task runner
+.task/
+
+# E2E test artifacts
+.test-infra/
+chainsaw-report.json
+
 # Ignore local claude settings
 .claude/settings.local.json

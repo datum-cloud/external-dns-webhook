@@ -8,13 +8,14 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: '1.22'
+  GO_VERSION: '1.24'
+  TASK_X_REMOTE_TASKFILES: '1'
 
 jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
     - name: Checkout repository
@@ -29,12 +30,16 @@ jobs:
       run: |
         sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 
+    - name: Install Flux CLI
+      run: |
+        curl -s https://fluxcd.io/install.sh | bash
+
     - name: Install Chainsaw
       run: |
         go install github.com/kyverno/chainsaw@latest
 
     - name: Run E2E tests
-      run: task ci:e2e
+      run: task --yes ci:e2e
 
     - name: Upload diagnostics
       if: failure()

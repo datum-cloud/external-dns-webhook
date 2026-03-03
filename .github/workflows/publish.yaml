@@ -1,0 +1,28 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  publish-docker:
+    name: Publish Docker Image
+    uses: datum-cloud/actions/.github/workflows/publish-docker.yaml@main
+    with:
+      image-name: external-dns-webhook
+
+  publish-kustomize-bundle:
+    name: Publish Kustomize Bundle
+    needs: publish-docker
+    uses: datum-cloud/actions/.github/workflows/publish-kustomize-bundle.yaml@main
+    with:
+      bundle-name: ghcr.io/datum-cloud/external-dns-webhook/deploy
+      bundle-path: config/base
+      image-overlays: config/base
+      image-name: ghcr.io/datum-cloud/external-dns-webhook

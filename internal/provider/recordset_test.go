@@ -44,9 +44,7 @@ func TestRecordSetManager_Create(t *testing.T) {
 					},
 				},
 			},
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
+			config: &Config{},
 			validate: func(t *testing.T, c client.Client) {
 				var rs dnsv1alpha1.DNSRecordSet
 				err := c.Get(context.Background(), client.ObjectKey{
@@ -80,8 +78,7 @@ func TestRecordSetManager_Create(t *testing.T) {
 				},
 			},
 			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-				DryRun:    true,
+				DryRun: true,
 			},
 			validate: func(t *testing.T, c client.Client) {
 				var rs dnsv1alpha1.DNSRecordSet
@@ -179,9 +176,7 @@ func TestRecordSetManager_Update(t *testing.T) {
 					},
 				},
 			},
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
+			config: &Config{},
 			validate: func(t *testing.T, c client.Client) {
 				var rs dnsv1alpha1.DNSRecordSet
 				err := c.Get(context.Background(), client.ObjectKey{
@@ -227,8 +222,7 @@ func TestRecordSetManager_Update(t *testing.T) {
 				},
 			},
 			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-				DryRun:    true,
+				DryRun: true,
 			},
 			validate: func(t *testing.T, c client.Client) {
 				var rs dnsv1alpha1.DNSRecordSet
@@ -302,9 +296,7 @@ func TestRecordSetManager_Delete(t *testing.T) {
 					},
 				},
 			},
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
+			config: &Config{},
 			validate: func(t *testing.T, c client.Client) {
 				var rs dnsv1alpha1.DNSRecordSet
 				err := c.Get(context.Background(), client.ObjectKey{
@@ -332,8 +324,7 @@ func TestRecordSetManager_Delete(t *testing.T) {
 				},
 			},
 			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-				DryRun:    true,
+				DryRun: true,
 			},
 			validate: func(t *testing.T, c client.Client) {
 				var rs dnsv1alpha1.DNSRecordSet
@@ -420,9 +411,7 @@ func TestRecordSetManager_List(t *testing.T) {
 				},
 			},
 			ownerID: "owner1",
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
+			config: &Config{},
 			wantCount: 1,
 		},
 		{
@@ -456,13 +445,11 @@ func TestRecordSetManager_List(t *testing.T) {
 				},
 			},
 			ownerID: "owner1",
-			config: &Config{
-				WatchMode: NamespaceWatchModeAll,
-			},
+			config: &Config{},
 			wantCount: 2,
 		},
 		{
-			name: "list in specific namespace mode",
+			name: "list finds records across all namespaces (cluster-wide)",
 			recordSets: []dnsv1alpha1.DNSRecordSet{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -492,11 +479,8 @@ func TestRecordSetManager_List(t *testing.T) {
 				},
 			},
 			ownerID: "owner1",
-			config: &Config{
-				WatchMode: NamespaceWatchModeSpecific,
-				Namespace: "namespace1",
-			},
-			wantCount: 1,
+			config: &Config{},
+			wantCount: 2,
 		},
 	}
 
@@ -579,9 +563,7 @@ func TestRecordSetManager_Get(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.ErrorLevel)
 
-	config := &Config{
-		WatchMode: NamespaceWatchModeAll,
-	}
+	config := &Config{}
 
 	mgr := NewRecordSetManager(fakeClient, config, logger)
 

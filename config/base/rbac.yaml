@@ -6,10 +6,10 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get", "list", "watch"]
-- apiGroups: ["dns.datum.net"]
+- apiGroups: ["dns.networking.miloapis.com"]
   resources: ["dnszones"]
   verbs: ["get", "list", "watch"]
-- apiGroups: ["dns.datum.net"]
+- apiGroups: ["dns.networking.miloapis.com"]
   resources: ["dnsrecordsets"]
   verbs: ["get", "list", "watch", "create", "update", "delete"]
 ---

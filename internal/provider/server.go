@@ -250,8 +250,7 @@ func (s *Server) healthHandler(w http.ResponseWriter, _ *http.Request) {
 
 // readyHandler handles /readyz endpoint (readiness probe).
 func (s *Server) readyHandler(w http.ResponseWriter, _ *http.Request) {
-	// Check if Kubernetes client is connected and zones are discovered
-	zones := s.provider.zoneWatcher.ListZones()
+	zones := s.provider.Registry().ListZones()
 
 	// Grace period for startup: allow 30 seconds to discover zones
 	gracePeriod := 30 * time.Second

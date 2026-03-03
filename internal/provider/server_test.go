@@ -22,13 +22,11 @@ import (
 )
 
 func setupServerTest(t *testing.T, objects ...runtime.Object) *Server {
+	t.Helper()
 	scheme := runtime.NewScheme()
-	err := dnsv1alpha1.AddToScheme(scheme)
-	require.NoError(t, err)
-	err = corev1.AddToScheme(scheme)
-	require.NoError(t, err)
+	require.NoError(t, dnsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
 
-	// Add default namespace if not present
 	hasNamespace := false
 	for _, obj := range objects {
 		if ns, ok := obj.(*corev1.Namespace); ok && ns.Name == "default" {
@@ -38,9 +36,7 @@ func setupServerTest(t *testing.T, objects ...runtime.Object) *Server {
 	}
 	if !hasNamespace {
 		objects = append(objects, &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "default",
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: "default"},
 		})
 	}
 
@@ -50,7 +46,6 @@ func setupServerTest(t *testing.T, objects ...runtime.Object) *Server {
 		Build()
 
 	config := &Config{
-		WatchMode:   NamespaceWatchModeAll,
 		Port:        8888,
 		BindAddress: "127.0.0.1",
 		MetricsPort: 8080,
@@ -59,47 +54,37 @@ func setupServerTest(t *testing.T, objects ...runtime.Object) *Server {
 	logger := logrus.New()
 	logger.SetLevel(logrus.ErrorLevel)
 
-	provider := &Provider{
-		client:       fakeClient,
-		config:       config,
-		ownerID:      "test-owner",
-		logger:       logger,
-		zoneWatcher:  NewZoneWatcher(fakeClient, config, logger),
-		recordSetMgr: NewRecordSetManager(fakeClient, config, logger),
-	}
+	src := NewZoneSource("test", fakeClient, ZoneSourceConfig{}, config, logger)
 
-	server := NewServer(provider, config)
+	p, err := NewProvider(config, "test-owner", []*ZoneSource{src})
+	require.NoError(t, err)
+
+	server := NewServer(p, config)
 	return server
 }
 
 func TestServer_NegotiateHandler(t *testing.T) {
 	objects := []runtime.Object{
 		&dnsv1alpha1.DNSZone{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "example-com",
-				Namespace: "default",
-			},
-			Spec: dnsv1alpha1.DNSZoneSpec{
-				DomainName: "example.com",
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 		},
 	}
 
 	server := setupServerTest(t, objects...)
 	ctx := context.Background()
-	err := server.provider.zoneWatcher.Refresh(ctx)
-	require.NoError(t, err)
+	require.NoError(t, server.provider.registry.Refresh(ctx))
 
 	tests := []struct {
-		name           string
-		method         string
-		wantStatus     int
+		name            string
+		method          string
+		wantStatus      int
 		wantContentType string
 	}{
 		{
-			name:           "GET / returns domain filter with correct content-type",
-			method:         http.MethodGet,
-			wantStatus:     http.StatusOK,
+			name:            "GET / returns domain filter with correct content-type",
+			method:          http.MethodGet,
+			wantStatus:      http.StatusOK,
 			wantContentType: MediaTypeFormatAndVersion,
 		},
 		{
@@ -134,34 +119,19 @@ func TestServer_GetRecordsHandler(t *testing.T) {
 	ttl := int64(300)
 	objects := []runtime.Object{
 		&dnsv1alpha1.DNSZone{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "example-com",
-				Namespace: "default",
-			},
-			Spec: dnsv1alpha1.DNSZoneSpec{
-				DomainName: "example.com",
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 		},
 		&dnsv1alpha1.DNSRecordSet{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "app-a-12345678",
-				Namespace: "default",
-				Labels: map[string]string{
-					LabelOwner:     "test-owner",
-					LabelManagedBy: ManagedByValue,
-				},
+				Name: "app-a-12345678", Namespace: "default",
+				Labels: map[string]string{LabelOwner: "test-owner", LabelManagedBy: ManagedByValue},
 			},
 			Spec: dnsv1alpha1.DNSRecordSetSpec{
-				DNSZoneRef: corev1.LocalObjectReference{
-					Name: "example-com",
-				},
+				DNSZoneRef: corev1.LocalObjectReference{Name: "example-com"},
 				RecordType: dnsv1alpha1.RRTypeA,
 				Records: []dnsv1alpha1.RecordEntry{
-					{
-						Name: "app",
-						TTL:  &ttl,
-						A:    &dnsv1alpha1.ARecordSpec{Content: "192.0.2.1"},
-					},
+					{Name: "app", TTL: &ttl, A: &dnsv1alpha1.ARecordSpec{Content: "192.0.2.1"}},
 				},
 			},
 		},
@@ -169,8 +139,7 @@ func TestServer_GetRecordsHandler(t *testing.T) {
 
 	server := setupServerTest(t, objects...)
 	ctx := context.Background()
-	err := server.provider.zoneWatcher.Refresh(ctx)
-	require.NoError(t, err)
+	require.NoError(t, server.provider.registry.Refresh(ctx))
 
 	req := httptest.NewRequest(http.MethodGet, "/records", nil)
 	req = req.WithContext(ctx)
@@ -182,7 +151,7 @@ func TestServer_GetRecordsHandler(t *testing.T) {
 	assert.Equal(t, MediaTypeFormatAndVersion, w.Header().Get(ContentTypeHeader))
 
 	var endpoints []*endpoint.Endpoint
-	err = json.NewDecoder(w.Body).Decode(&endpoints)
+	err := json.NewDecoder(w.Body).Decode(&endpoints)
 	require.NoError(t, err)
 	assert.Len(t, endpoints, 1)
 	assert.Equal(t, "app.example.com", endpoints[0].DNSName)
@@ -191,28 +160,18 @@ func TestServer_GetRecordsHandler(t *testing.T) {
 func TestServer_ApplyChangesHandler(t *testing.T) {
 	objects := []runtime.Object{
 		&dnsv1alpha1.DNSZone{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "example-com",
-				Namespace: "default",
-			},
-			Spec: dnsv1alpha1.DNSZoneSpec{
-				DomainName: "example.com",
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 		},
 	}
 
 	server := setupServerTest(t, objects...)
 	ctx := context.Background()
-	err := server.provider.zoneWatcher.Refresh(ctx)
-	require.NoError(t, err)
+	require.NoError(t, server.provider.registry.Refresh(ctx))
 
 	changes := &plan.Changes{
 		Create: []*endpoint.Endpoint{
-			{
-				DNSName:    "app.example.com",
-				Targets:    endpoint.Targets{"192.0.2.1"},
-				RecordType: endpoint.RecordTypeA,
-			},
+			{DNSName: "app.example.com", Targets: endpoint.Targets{"192.0.2.1"}, RecordType: endpoint.RecordTypeA},
 		},
 	}
 
@@ -242,11 +201,7 @@ func TestServer_AdjustEndpointsHandler(t *testing.T) {
 			name:   "POST /adjustendpoints returns adjusted endpoints",
 			method: http.MethodPost,
 			body: []*endpoint.Endpoint{
-				{
-					DNSName:    "app.example.com.",
-					Targets:    endpoint.Targets{"192.0.2.1"},
-					RecordType: endpoint.RecordTypeA,
-				},
+				{DNSName: "app.example.com.", Targets: endpoint.Targets{"192.0.2.1"}, RecordType: endpoint.RecordTypeA},
 			},
 			wantStatus: http.StatusOK,
 			validate: func(t *testing.T, w *httptest.ResponseRecorder) {
@@ -255,7 +210,6 @@ func TestServer_AdjustEndpointsHandler(t *testing.T) {
 				err := json.NewDecoder(w.Body).Decode(&endpoints)
 				require.NoError(t, err)
 				assert.Len(t, endpoints, 1)
-				// Should have trailing dot removed
 				assert.Equal(t, "app.example.com", endpoints[0].DNSName)
 			},
 		},
@@ -327,13 +281,8 @@ func TestServer_ReadyHandler(t *testing.T) {
 			name: "returns 200 when zones exist",
 			zones: []runtime.Object{
 				&dnsv1alpha1.DNSZone{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "example-com",
-						Namespace: "default",
-					},
-					Spec: dnsv1alpha1.DNSZoneSpec{
-						DomainName: "example.com",
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+					Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 				},
 			},
 			startTime:  time.Now(),
@@ -349,7 +298,7 @@ func TestServer_ReadyHandler(t *testing.T) {
 		{
 			name:       "returns 503 when no zones (outside grace period)",
 			zones:      []runtime.Object{},
-			startTime:  time.Now().Add(-35 * time.Second), // Outside 30s grace period
+			startTime:  time.Now().Add(-35 * time.Second),
 			wantStatus: http.StatusServiceUnavailable,
 			validate: func(t *testing.T, w *httptest.ResponseRecorder) {
 				var response map[string]interface{}
@@ -362,7 +311,7 @@ func TestServer_ReadyHandler(t *testing.T) {
 		{
 			name:       "returns 200 when no zones (within grace period)",
 			zones:      []runtime.Object{},
-			startTime:  time.Now().Add(-10 * time.Second), // Within 30s grace period
+			startTime:  time.Now().Add(-10 * time.Second),
 			wantStatus: http.StatusOK,
 			validate: func(t *testing.T, w *httptest.ResponseRecorder) {
 				var response map[string]interface{}
@@ -379,8 +328,7 @@ func TestServer_ReadyHandler(t *testing.T) {
 			server.startTime = tt.startTime
 
 			ctx := context.Background()
-			err := server.provider.zoneWatcher.Refresh(ctx)
-			require.NoError(t, err)
+			require.NoError(t, server.provider.registry.Refresh(ctx))
 
 			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 			w := httptest.NewRecorder()
@@ -399,41 +347,23 @@ func TestServer_ReadyHandler(t *testing.T) {
 func TestServer_RecordsHandler(t *testing.T) {
 	objects := []runtime.Object{
 		&dnsv1alpha1.DNSZone{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "example-com",
-				Namespace: "default",
-			},
-			Spec: dnsv1alpha1.DNSZoneSpec{
-				DomainName: "example.com",
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "example.com"},
 		},
 	}
 
 	server := setupServerTest(t, objects...)
 	ctx := context.Background()
-	err := server.provider.zoneWatcher.Refresh(ctx)
-	require.NoError(t, err)
+	require.NoError(t, server.provider.registry.Refresh(ctx))
 
 	tests := []struct {
 		name       string
 		method     string
 		wantStatus int
 	}{
-		{
-			name:       "GET /records returns records",
-			method:     http.MethodGet,
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "POST /records applies changes",
-			method:     http.MethodPost,
-			wantStatus: http.StatusNoContent,
-		},
-		{
-			name:       "PUT /records returns method not allowed",
-			method:     http.MethodPut,
-			wantStatus: http.StatusMethodNotAllowed,
-		},
+		{name: "GET /records returns records", method: http.MethodGet, wantStatus: http.StatusOK},
+		{name: "POST /records applies changes", method: http.MethodPost, wantStatus: http.StatusNoContent},
+		{name: "PUT /records returns method not allowed", method: http.MethodPut, wantStatus: http.StatusMethodNotAllowed},
 	}
 
 	for _, tt := range tests {
@@ -462,7 +392,7 @@ func TestServer_InstrumentHandler(t *testing.T) {
 	testHandler := func(w http.ResponseWriter, r *http.Request) {
 		handlerCalled = true
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	}
 
 	instrumentedHandler := server.instrumentHandler("/test", testHandler)
@@ -483,15 +413,12 @@ func TestServer_ResponseWriterWrapper(t *testing.T) {
 		statusCode:     http.StatusOK,
 	}
 
-	// Default status code
 	assert.Equal(t, http.StatusOK, wrapper.statusCode)
 
-	// Write header
 	wrapper.WriteHeader(http.StatusNotFound)
 	assert.Equal(t, http.StatusNotFound, wrapper.statusCode)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
-	// Write body
 	_, err := wrapper.Write([]byte("test"))
 	require.NoError(t, err)
 	assert.Equal(t, "test", w.Body.String())
