@@ -372,6 +372,159 @@ func TestProvider_NewProvider(t *testing.T) {
 	})
 }
 
+func TestProvider_Records_NamespaceLabelSelector_FiltersCorrectly(t *testing.T) {
+	ctx := context.Background()
+
+	objects := []runtime.Object{
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "managed-ns",
+				Labels: map[string]string{"datum.net/managed-dns": "true"},
+			},
+		},
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "unmanaged-ns"},
+		},
+		// Zone in labeled namespace
+		&dnsv1alpha1.DNSZone{
+			ObjectMeta: metav1.ObjectMeta{Name: "managed-com", Namespace: "managed-ns"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "managed.com"},
+		},
+		// Zone in unlabeled namespace — should NOT be discovered
+		&dnsv1alpha1.DNSZone{
+			ObjectMeta: metav1.ObjectMeta{Name: "unmanaged-com", Namespace: "unmanaged-ns"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "unmanaged.com"},
+		},
+		// Record in labeled namespace (owned by us)
+		&dnsv1alpha1.DNSRecordSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "app-a-managed", Namespace: "managed-ns",
+				Labels: map[string]string{LabelOwner: "test-owner", LabelManagedBy: ManagedByValue},
+			},
+			Spec: dnsv1alpha1.DNSRecordSetSpec{
+				DNSZoneRef: corev1.LocalObjectReference{Name: "managed-com"},
+				RecordType: dnsv1alpha1.RRTypeA,
+				Records:    []dnsv1alpha1.RecordEntry{{Name: "app", A: &dnsv1alpha1.ARecordSpec{Content: "192.0.2.1"}}},
+			},
+		},
+		// Record in unlabeled namespace (owned by us) — should NOT be returned
+		&dnsv1alpha1.DNSRecordSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "app-a-unmanaged", Namespace: "unmanaged-ns",
+				Labels: map[string]string{LabelOwner: "test-owner", LabelManagedBy: ManagedByValue},
+			},
+			Spec: dnsv1alpha1.DNSRecordSetSpec{
+				DNSZoneRef: corev1.LocalObjectReference{Name: "unmanaged-com"},
+				RecordType: dnsv1alpha1.RRTypeA,
+				Records:    []dnsv1alpha1.RecordEntry{{Name: "app", A: &dnsv1alpha1.ARecordSpec{Content: "10.0.0.1"}}},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, dnsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRuntimeObjects(objects...).
+		Build()
+
+	config := &Config{DryRun: false}
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+
+	src := NewZoneSource("test", fakeClient, ZoneSourceConfig{
+		NamespaceLabelSelector: "datum.net/managed-dns=true",
+	}, config, logger)
+
+	p, err := NewProvider(config, "test-owner", []*ZoneSource{src})
+	require.NoError(t, err)
+	require.NoError(t, p.registry.Refresh(ctx))
+
+	// Zone discovery should only find managed.com
+	zones := p.registry.ListZones()
+	assert.Len(t, zones, 1, "only zones from labeled namespaces should be discovered")
+	assert.Equal(t, "managed.com", zones[0].Spec.DomainName)
+
+	// Domain filter should only include managed.com
+	filter := p.GetDomainFilter()
+	assert.True(t, filter.Match("app.managed.com"))
+	assert.False(t, filter.Match("app.unmanaged.com"))
+
+	// Records() must only return records from labeled namespaces
+	endpoints, err := p.Records(ctx)
+	require.NoError(t, err)
+	require.Len(t, endpoints, 1, "Records() should only return records from labeled namespaces")
+	assert.Equal(t, "app.managed.com", endpoints[0].DNSName)
+	assert.Equal(t, endpoint.Targets{"192.0.2.1"}, endpoints[0].Targets)
+}
+
+func TestProvider_Records_NamespaceFlag_FiltersCorrectly(t *testing.T) {
+	ctx := context.Background()
+
+	objects := []runtime.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "watched-ns"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other-ns"}},
+		&dnsv1alpha1.DNSZone{
+			ObjectMeta: metav1.ObjectMeta{Name: "watched-com", Namespace: "watched-ns"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "watched.com"},
+		},
+		&dnsv1alpha1.DNSZone{
+			ObjectMeta: metav1.ObjectMeta{Name: "other-com", Namespace: "other-ns"},
+			Spec:       dnsv1alpha1.DNSZoneSpec{DomainName: "other.com"},
+		},
+		&dnsv1alpha1.DNSRecordSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "app-a-watched", Namespace: "watched-ns",
+				Labels: map[string]string{LabelOwner: "test-owner", LabelManagedBy: ManagedByValue},
+			},
+			Spec: dnsv1alpha1.DNSRecordSetSpec{
+				DNSZoneRef: corev1.LocalObjectReference{Name: "watched-com"},
+				RecordType: dnsv1alpha1.RRTypeA,
+				Records:    []dnsv1alpha1.RecordEntry{{Name: "app", A: &dnsv1alpha1.ARecordSpec{Content: "192.0.2.1"}}},
+			},
+		},
+		&dnsv1alpha1.DNSRecordSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "app-a-other", Namespace: "other-ns",
+				Labels: map[string]string{LabelOwner: "test-owner", LabelManagedBy: ManagedByValue},
+			},
+			Spec: dnsv1alpha1.DNSRecordSetSpec{
+				DNSZoneRef: corev1.LocalObjectReference{Name: "other-com"},
+				RecordType: dnsv1alpha1.RRTypeA,
+				Records:    []dnsv1alpha1.RecordEntry{{Name: "app", A: &dnsv1alpha1.ARecordSpec{Content: "10.0.0.1"}}},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, dnsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRuntimeObjects(objects...).
+		Build()
+
+	config := &Config{DryRun: false}
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+
+	src := NewZoneSource("test", fakeClient, ZoneSourceConfig{
+		Namespace: "watched-ns",
+	}, config, logger)
+
+	p, err := NewProvider(config, "test-owner", []*ZoneSource{src})
+	require.NoError(t, err)
+	require.NoError(t, p.registry.Refresh(ctx))
+
+	endpoints, err := p.Records(ctx)
+	require.NoError(t, err)
+	require.Len(t, endpoints, 1, "Records() should only return records from the watched namespace")
+	assert.Equal(t, "app.watched.com", endpoints[0].DNSName)
+}
+
 func TestProvider_OwnershipConflict(t *testing.T) {
 	objects := []runtime.Object{
 		&dnsv1alpha1.DNSZone{

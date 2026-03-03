@@ -6,7 +6,6 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	dnsv1alpha1 "go.miloapis.com/dns-operator/api/v1alpha1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"sigs.k8s.io/external-dns/endpoint"
 	"sigs.k8s.io/external-dns/plan"
@@ -49,7 +48,8 @@ func (p *Provider) Start(ctx context.Context) error {
 }
 
 // Records returns the current DNS records from DNSRecordSet resources across
-// all zone sources.
+// all zone sources. Only records in namespaces with discovered zones are
+// returned, ensuring namespace-level filtering is respected.
 func (p *Provider) Records(ctx context.Context) ([]*endpoint.Endpoint, error) {
 	p.logger.Debug("Fetching DNS records from all zone sources")
 
@@ -60,6 +60,8 @@ func (p *Provider) Records(ctx context.Context) ([]*endpoint.Endpoint, error) {
 	var allEndpoints []*endpoint.Endpoint
 
 	for _, src := range p.registry.Sources() {
+		zoneNamespaces := src.GetZoneNamespaces()
+
 		recordSets, err := src.RecordSets().List(ctx, p.ownerID)
 		if err != nil {
 			p.logger.WithError(err).Errorf("Failed to list records from source %q", src.Name())
@@ -67,7 +69,13 @@ func (p *Provider) Records(ctx context.Context) ([]*endpoint.Endpoint, error) {
 		}
 
 		for _, rs := range recordSets {
-			zone := p.resolveZoneForRecordSet(ctx, rs, src)
+			if !zoneNamespaces[rs.Namespace] {
+				p.logger.Debugf("Skipping record %s/%s: namespace not in discovered zone set",
+					rs.Namespace, rs.Name)
+				continue
+			}
+
+			zone := p.resolveZoneForRecordSet(rs, src)
 			if zone == nil {
 				continue
 			}
@@ -87,25 +95,17 @@ func (p *Provider) Records(ctx context.Context) ([]*endpoint.Endpoint, error) {
 	return allEndpoints, nil
 }
 
-// resolveZoneForRecordSet attempts to find the zone that owns a record set,
-// first via the registry cache, then via a direct API lookup.
-func (p *Provider) resolveZoneForRecordSet(ctx context.Context, rs *dnsv1alpha1.DNSRecordSet, src *ZoneSource) *dnsv1alpha1.DNSZone {
-	match, err := p.registry.GetZoneForDomain(rs.Spec.DNSZoneRef.Name)
-	if err == nil {
-		return match.Zone
-	}
-
-	var zoneObj dnsv1alpha1.DNSZone
-	if err := src.Client().Get(ctx, client.ObjectKey{
-		Name:      rs.Spec.DNSZoneRef.Name,
-		Namespace: rs.Namespace,
-	}, &zoneObj); err != nil {
-		p.logger.Warnf("Failed to get zone %s for record set %s/%s: %v",
-			rs.Spec.DNSZoneRef.Name, rs.Namespace, rs.Name, err)
+// resolveZoneForRecordSet looks up the zone for a record set from the source's
+// zone cache using the DNSZoneRef object name and namespace. No API fallback is
+// performed — if the zone isn't in the cache, the record is skipped.
+func (p *Provider) resolveZoneForRecordSet(rs *dnsv1alpha1.DNSRecordSet, src *ZoneSource) *dnsv1alpha1.DNSZone {
+	zone := src.GetZoneByRef(rs.Spec.DNSZoneRef.Name, rs.Namespace)
+	if zone == nil {
+		p.logger.Warnf("Zone %s not found in cache for record %s/%s",
+			rs.Spec.DNSZoneRef.Name, rs.Namespace, rs.Name)
 		RecordTranslationError("zone_not_found")
-		return nil
 	}
-	return &zoneObj
+	return zone
 }
 
 // ApplyChanges applies the given changes to DNS records, routing each operation

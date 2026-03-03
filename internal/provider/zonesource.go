@@ -182,6 +182,33 @@ func (s *ZoneSource) GetZones() map[string]*dnsv1alpha1.DNSZone {
 	return out
 }
 
+// GetZoneByRef looks up a cached zone by its Kubernetes object name and
+// namespace. Returns nil if no matching zone is found in the cache.
+func (s *ZoneSource) GetZoneByRef(name, namespace string) *dnsv1alpha1.DNSZone {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, zone := range s.cache {
+		if zone.Name == name && zone.Namespace == namespace {
+			return zone
+		}
+	}
+	return nil
+}
+
+// GetZoneNamespaces returns the set of namespaces that contain discovered
+// zones. Only records in these namespaces should be considered managed.
+func (s *ZoneSource) GetZoneNamespaces() map[string]bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ns := make(map[string]bool)
+	for _, zone := range s.cache {
+		ns[zone.Namespace] = true
+	}
+	return ns
+}
+
 // Refresh forces an immediate zone cache refresh.
 func (s *ZoneSource) Refresh(ctx context.Context) error {
 	return s.refresh(ctx)
