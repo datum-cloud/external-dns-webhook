@@ -83,7 +83,6 @@ func EndpointToDNSRecordSet(ep *endpoint.Endpoint, zone *dnsv1alpha1.DNSZone, ow
 			Namespace: zone.Namespace,
 			Labels: map[string]string{
 				LabelOwner:      ownerID,
-				LabelResource:   ep.DNSName,
 				LabelRecordType: ep.RecordType,
 				LabelManagedBy:  ManagedByValue,
 			},

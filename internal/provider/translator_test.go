@@ -51,7 +51,6 @@ func TestEndpointToDNSRecordSet(t *testing.T) {
 				assert.NotNil(t, rs.Spec.Records[0].TTL)
 				assert.Equal(t, int64(300), *rs.Spec.Records[0].TTL)
 				assert.Equal(t, "test-owner", rs.Labels[LabelOwner])
-				assert.Equal(t, "app.example.com", rs.Labels[LabelResource])
 				assert.Equal(t, endpoint.RecordTypeA, rs.Labels[LabelRecordType])
 				assert.Equal(t, ManagedByValue, rs.Labels[LabelManagedBy])
 			},

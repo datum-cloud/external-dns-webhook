@@ -14,8 +14,6 @@ import (
 const (
 	// LabelOwner identifies the ExternalDNS instance that owns this record
 	LabelOwner = "external-dns.io/owner"
-	// LabelResource identifies the DNS name this record is for
-	LabelResource = "external-dns.io/resource"
 	// LabelRecordType identifies the record type
 	LabelRecordType = "external-dns.io/record-type"
 	// LabelManagedBy identifies this as managed by the Datum webhook
