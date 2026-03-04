@@ -1,0 +1,72 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: httproute-creates-record
+spec:
+  description: |
+    Verify that creating an HTTPRoute with a hostname causes a DNSRecordSet to be created,
+    and that deleting the HTTPRoute removes the DNSRecordSet.
+  steps:
+  # Step 1: Verify clean state - no test DNSRecordSets exist
+  - name: assert-clean-state
+    try:
+    - error:
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            # Match any DNSRecordSet with test- prefix in name
+            name: test-?*
+
+  # Step 2: Create HTTPRoute
+  - name: create-httproute
+    try:
+    - apply:
+        file: httproute.yaml
+
+  # Step 3: Assert DNSRecordSet is created with correct spec
+  - name: assert-dnsrecordset-created
+    try:
+    - assert:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+          spec:
+            dnsZoneRef:
+              name: example-com
+            recordType: A
+            records:
+            - name: test-app
+
+  # Step 4: Delete HTTPRoute
+  - name: delete-httproute
+    try:
+    - delete:
+        ref:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          namespace: default
+          name: test-httproute
+
+  # Step 5: Assert DNSRecordSet is removed
+  - name: assert-dnsrecordset-removed
+    try:
+    - error:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            # Match the specific test-app record
+            name: test-?*

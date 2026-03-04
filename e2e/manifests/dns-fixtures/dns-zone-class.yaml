@@ -1,0 +1,6 @@
+apiVersion: dns.networking.miloapis.com/v1alpha1
+kind: DNSZoneClass
+metadata:
+  name: cloudflare-test
+spec:
+  controllerName: mock-e2e-controller

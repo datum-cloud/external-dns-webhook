@@ -1,0 +1,113 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: zone-routing
+spec:
+  description: |
+    Verify that the webhook routes records to the correct zone using longest-suffix matching.
+    parent-app.example.com -> example-com zone, app.sub.example.com -> sub-example-com zone.
+  steps:
+  - name: create-sub-zone
+    try:
+    - apply:
+        file: sub-zone.yaml
+    - assert:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSZone
+          metadata:
+            name: sub-example-com
+            namespace: default
+
+  - name: wait-for-zone-discovery
+    try:
+    - sleep:
+        duration: 35s
+
+  - name: create-routes
+    try:
+    - apply:
+        file: httproute-parent.yaml
+    - apply:
+        file: httproute-sub.yaml
+
+  - name: assert-parent-routes-to-parent-zone
+    try:
+    - assert:
+        timeout: 90s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+          spec:
+            dnsZoneRef:
+              name: example-com
+            recordType: A
+            records:
+            - name: parent-app
+
+  - name: assert-sub-routes-to-sub-zone
+    try:
+    - assert:
+        timeout: 90s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+          spec:
+            dnsZoneRef:
+              name: sub-example-com
+            recordType: A
+            records:
+            - name: app
+
+  - name: cleanup
+    try:
+    - delete:
+        ref:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          namespace: default
+          name: route-parent-zone
+    - delete:
+        ref:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          namespace: default
+          name: route-sub-zone
+    - delete:
+        ref:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSZone
+          namespace: default
+          name: sub-example-com
+
+  - name: assert-records-removed
+    try:
+    - error:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: parent-app-?*
+    - error:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: app-?*

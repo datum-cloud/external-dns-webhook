@@ -1,0 +1,66 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: dnsendpoint-creates-record
+spec:
+  description: |
+    Verify that creating a DNSEndpoint CRD causes the webhook to create a
+    corresponding DNSRecordSet, and deleting the DNSEndpoint removes it.
+    This tests the ExternalDNS CRD source alongside the webhook provider.
+  steps:
+  - name: assert-clean-state
+    try:
+    - error:
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: endpoint-app-?*
+
+  - name: create-dnsendpoint
+    try:
+    - apply:
+        file: dnsendpoint.yaml
+
+  - name: assert-dnsrecordset-created
+    try:
+    - assert:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+          spec:
+            dnsZoneRef:
+              name: example-com
+            recordType: A
+            records:
+            - name: endpoint-app
+
+  - name: delete-dnsendpoint
+    try:
+    - delete:
+        ref:
+          apiVersion: externaldns.k8s.io/v1alpha1
+          kind: DNSEndpoint
+          namespace: default
+          name: test-endpoint
+
+  - name: assert-dnsrecordset-removed
+    try:
+    - error:
+        timeout: 60s
+        resource:
+          apiVersion: dns.networking.miloapis.com/v1alpha1
+          kind: DNSRecordSet
+          metadata:
+            namespace: default
+            labels:
+              external-dns.io/owner: external-dns-e2e
+            name: endpoint-app-?*
