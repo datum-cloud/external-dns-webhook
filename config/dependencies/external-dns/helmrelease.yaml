@@ -8,7 +8,7 @@ spec:
   chart:
     spec:
       chart: external-dns
-      version: '>=1.15.0'
+      version: '1.22.0'
       sourceRef:
         kind: HelmRepository
         name: external-dns
@@ -46,6 +46,7 @@ spec:
         - apiGroups: ["externaldns.k8s.io"]
           resources: ["dnsendpoints/status"]
           verbs: ["*"]
+    policy: upsert-only
     txtOwnerId: external-dns-e2e
     logLevel: debug
     interval: 30s
