@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	log "github.com/sirupsen/logrus"
 	dnsv1alpha1 "go.miloapis.com/dns-operator/api/v1alpha1"
@@ -108,31 +109,108 @@ func (p *Provider) resolveZoneForRecordSet(rs *dnsv1alpha1.DNSRecordSet, src *Zo
 	return zone
 }
 
+// IncompleteApplyError reports that the context ended before every change in
+// a batch was attempted. Changes that were not attempted are left for the next
+// sync.
+type IncompleteApplyError struct {
+	Attempted int
+	Total     int
+	Err       error
+}
+
+func (e *IncompleteApplyError) Error() string {
+	return fmt.Sprintf("attempted %d of %d changes before stopping: %v", e.Attempted, e.Total, e.Err)
+}
+
+func (e *IncompleteApplyError) Unwrap() error { return e.Err }
+
+type changeFunc func(context.Context, *endpoint.Endpoint) error
+
 // ApplyChanges applies the given changes to DNS records, routing each operation
-// to the zone source that owns the target zone.
+// to the zone source that owns the target zone. Changes within a phase run in
+// parallel, bounded by the configured concurrency. A delete whose record set is
+// recreated in the same batch runs before the creates; every other delete runs
+// last. Per-change failures are logged and do not fail the batch. If ctx ends
+// first, the remaining changes are skipped and an *IncompleteApplyError is
+// returned.
 func (p *Provider) ApplyChanges(ctx context.Context, changes *plan.Changes) error {
+	total := len(changes.Create) + len(changes.UpdateNew) + len(changes.Delete)
 	p.logger.Debugf("Applying changes: %d creates, %d updates, %d deletes",
 		len(changes.Create), len(changes.UpdateNew), len(changes.Delete))
 
+	created := make(map[string]bool, len(changes.Create))
 	for _, ep := range changes.Create {
-		if err := p.createRecord(ctx, ep); err != nil {
-			p.logger.Errorf("Failed to create record for %s: %v", ep.DNSName, err)
-		}
+		created[recordSetNameFor(ep)] = true
 	}
-
-	for _, ep := range changes.UpdateNew {
-		if err := p.updateRecord(ctx, ep); err != nil {
-			p.logger.Errorf("Failed to update record for %s: %v", ep.DNSName, err)
-		}
-	}
-
+	var replacedDeletes, deletes []*endpoint.Endpoint
 	for _, ep := range changes.Delete {
-		if err := p.deleteRecord(ctx, ep); err != nil {
-			p.logger.Errorf("Failed to delete record for %s: %v", ep.DNSName, err)
+		if created[recordSetNameFor(ep)] {
+			replacedDeletes = append(replacedDeletes, ep)
+		} else {
+			deletes = append(deletes, ep)
 		}
 	}
 
+	phases := []struct {
+		op    string
+		eps   []*endpoint.Endpoint
+		apply changeFunc
+	}{
+		{"delete", replacedDeletes, p.deleteRecord},
+		{"create", changes.Create, p.createRecord},
+		{"update", changes.UpdateNew, p.updateRecord},
+		{"delete", deletes, p.deleteRecord},
+	}
+
+	attempted := 0
+	for _, phase := range phases {
+		attempted += p.applyPhase(ctx, phase.op, phase.eps, phase.apply)
+		if err := ctx.Err(); err != nil {
+			return &IncompleteApplyError{Attempted: attempted, Total: total, Err: err}
+		}
+	}
 	return nil
+}
+
+func (p *Provider) applyPhase(ctx context.Context, op string, eps []*endpoint.Endpoint, apply changeFunc) int {
+	sem := make(chan struct{}, p.config.EffectiveApplyConcurrency())
+	var wg sync.WaitGroup
+	attempted := 0
+
+	for _, ep := range eps {
+		select {
+		case <-ctx.Done():
+		case sem <- struct{}{}:
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		attempted++
+		wg.Add(1)
+		go func(ep *endpoint.Endpoint) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := p.applyOne(ctx, apply, ep); err != nil {
+				p.logger.Errorf("Failed to %s record for %s: %v", op, ep.DNSName, err)
+			}
+		}(ep)
+	}
+
+	wg.Wait()
+	return attempted
+}
+
+func (p *Provider) applyOne(ctx context.Context, apply changeFunc, ep *endpoint.Endpoint) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return apply(ctx, ep)
+}
+
+func recordSetNameFor(ep *endpoint.Endpoint) string {
+	return GenerateRecordSetName(ep.DNSName, ep.RecordType, ep.SetIdentifier)
 }
 
 func (p *Provider) createRecord(ctx context.Context, ep *endpoint.Endpoint) error {
@@ -198,8 +276,7 @@ func (p *Provider) deleteRecord(ctx context.Context, ep *endpoint.Endpoint) erro
 		return fmt.Errorf("no zone found for domain %s: %w", ep.DNSName, err)
 	}
 
-	name := GenerateRecordSetName(ep.DNSName, ep.RecordType, ep.SetIdentifier)
-	return match.Source.RecordSets().Delete(ctx, name, match.Zone.Namespace)
+	return match.Source.RecordSets().Delete(ctx, recordSetNameFor(ep), match.Zone.Namespace)
 }
 
 // AdjustEndpoints modifies endpoints before they are processed by the plan.
