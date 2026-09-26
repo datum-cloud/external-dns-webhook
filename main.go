@@ -32,6 +32,8 @@ func main() {
 		logLevel               string
 		dryRun                 bool
 		configPath             string
+		applyTimeout           time.Duration
+		applyConcurrency       int
 	)
 
 	flag.StringVar(&ownerID, "owner-id", "", "Owner ID to identify this ExternalDNS instance (required)")
@@ -44,6 +46,8 @@ func main() {
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Dry-run mode: do not make actual DNS changes")
 	flag.StringVar(&configPath, "config", "", "Path to YAML config file for additional zone sources")
+	flag.DurationVar(&applyTimeout, "apply-timeout", 5*time.Minute, "Maximum time to spend applying one batch of record changes; changes not reached in time are retried on the next sync")
+	flag.IntVar(&applyConcurrency, "apply-concurrency", 4, "Number of record changes applied in parallel")
 	flag.Parse()
 
 	cfg := &provider.Config{
@@ -53,6 +57,9 @@ func main() {
 		MetricsPort: metricsPort,
 		LogLevel:    logLevel,
 		DryRun:      dryRun,
+
+		ApplyTimeout:     applyTimeout,
+		ApplyConcurrency: applyConcurrency,
 	}
 
 	if configPath != "" {
@@ -71,6 +78,11 @@ func main() {
 			Namespace:              namespace,
 			NamespaceLabelSelector: namespaceLabelSelector,
 		}}
+	}
+
+	if applyTimeout <= 0 || applyConcurrency <= 0 {
+		fmt.Fprintln(os.Stderr, "error: --apply-timeout and --apply-concurrency must be positive")
+		os.Exit(1)
 	}
 
 	if cfg.OwnerID == "" {

@@ -93,6 +93,8 @@ task docker   # Build Docker image
 | `--metrics-port` | Port for Prometheus metrics and health checks | `8080` | No |
 | `--log-level` | Log level (debug, info, warn, error) | `info` | No |
 | `--dry-run` | Dry-run mode: do not make actual DNS changes | `false` | No |
+| `--apply-timeout` | Maximum time to spend on one batch of record changes. Changes not reached in time are skipped, the request fails with a 503 that names the limit, and ExternalDNS retries them on its next sync | `5m` | No |
+| `--apply-concurrency` | Number of record changes applied in parallel | `4` | No |
 
 ### Single-Cluster (Flags Only)
 

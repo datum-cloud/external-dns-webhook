@@ -17,6 +17,41 @@ type Config struct {
 	MetricsPort int                `yaml:"metricsPort"`
 	LogLevel    string             `yaml:"logLevel"`
 	DryRun      bool               `yaml:"dryRun"`
+
+	// ApplyTimeout bounds how long a single POST /records may spend applying
+	// changes. The webhook server's write timeout is derived from it so the
+	// handler always answers before the server closes the connection.
+	ApplyTimeout time.Duration `yaml:"applyTimeout"`
+	// ApplyConcurrency is the number of record changes applied in parallel.
+	ApplyConcurrency int `yaml:"applyConcurrency"`
+}
+
+const (
+	defaultApplyTimeout     = 5 * time.Minute
+	defaultApplyConcurrency = 4
+	writeTimeoutGrace       = 30 * time.Second
+)
+
+// EffectiveApplyTimeout returns ApplyTimeout, or the default when unset.
+func (c *Config) EffectiveApplyTimeout() time.Duration {
+	if c.ApplyTimeout <= 0 {
+		return defaultApplyTimeout
+	}
+	return c.ApplyTimeout
+}
+
+// EffectiveApplyConcurrency returns ApplyConcurrency, or the default when unset.
+func (c *Config) EffectiveApplyConcurrency() int {
+	if c.ApplyConcurrency <= 0 {
+		return defaultApplyConcurrency
+	}
+	return c.ApplyConcurrency
+}
+
+// WebhookWriteTimeout is the webhook server's write timeout. It exceeds the
+// apply timeout so a request that runs out of time still gets a response.
+func (c *Config) WebhookWriteTimeout() time.Duration {
+	return c.EffectiveApplyTimeout() + writeTimeoutGrace
 }
 
 // ZoneSourceConfig holds connection and filtering settings for a single
@@ -65,5 +100,8 @@ func DefaultConfig() *Config {
 		BindAddress: "0.0.0.0",
 		MetricsPort: 8080,
 		LogLevel:    "info",
+
+		ApplyTimeout:     defaultApplyTimeout,
+		ApplyConcurrency: defaultApplyConcurrency,
 	}
 }

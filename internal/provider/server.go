@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -72,17 +73,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Start webhook server
 	webhookAddr := fmt.Sprintf("%s:%d", s.config.BindAddress, s.config.Port)
-	webhookMux := http.NewServeMux()
-	webhookMux.HandleFunc("/", s.instrumentHandler("/", s.negotiateHandler))
-	webhookMux.HandleFunc("/records", s.instrumentHandler("/records", s.recordsHandler))
-	webhookMux.HandleFunc("/adjustendpoints", s.instrumentHandler("/adjustendpoints", s.adjustEndpointsHandler))
-
-	s.webhookServer = &http.Server{
-		Addr:         webhookAddr,
-		Handler:      webhookMux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
+	s.webhookServer = s.newWebhookServer(webhookAddr)
 
 	webhookListener, err := net.Listen("tcp", webhookAddr)
 	if err != nil {
@@ -95,6 +86,20 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (s *Server) newWebhookServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.instrumentHandler("/", s.negotiateHandler))
+	mux.HandleFunc("/records", s.instrumentHandler("/records", s.recordsHandler))
+	mux.HandleFunc("/adjustendpoints", s.instrumentHandler("/adjustendpoints", s.adjustEndpointsHandler))
+
+	return &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: s.config.WebhookWriteTimeout(),
+	}
 }
 
 // Shutdown gracefully shuts down both servers.
@@ -200,7 +205,21 @@ func (s *Server) handleApplyChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.provider.ApplyChanges(r.Context(), &changes); err != nil {
+	timeout := s.config.EffectiveApplyTimeout()
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	err := s.provider.ApplyChanges(ctx, &changes)
+	var incomplete *IncompleteApplyError
+	if errors.As(err, &incomplete) {
+		msg := fmt.Sprintf("apply timeout of %s reached: attempted %d of %d changes, the rest will be retried on the next sync; "+
+			"raise --apply-timeout or --apply-concurrency to fit larger batches in one request",
+			timeout, incomplete.Attempted, incomplete.Total)
+		log.Error(msg)
+		http.Error(w, msg, http.StatusServiceUnavailable)
+		return
+	}
+	if err != nil {
 		log.Errorf("Failed to apply changes: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
