@@ -1,12 +1,13 @@
 module go.datumapis.com/external-dns-webhook
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/prometheus/client_golang v1.23.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	go.miloapis.com/dns-operator v0.5.1
+	golang.org/x/crypto/x509roots/fallback v0.0.0-20261020153306-9f2b28d4331a
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
