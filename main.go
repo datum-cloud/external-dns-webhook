@@ -11,6 +11,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	dnsv1alpha1 "go.miloapis.com/dns-operator/api/v1alpha1"
+	_ "golang.org/x/crypto/x509roots/fallback"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
