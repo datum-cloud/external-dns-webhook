@@ -11,6 +11,10 @@ env:
   GO_VERSION: '1.26'
   TASK_X_REMOTE_TASKFILES: '1'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (startsWith(github.ref, 'refs/heads/') && github.ref != format('refs/heads/{0}', github.event.repository.default_branch)) }}
+
 jobs:
   e2e:
     name: E2E Tests
