@@ -2,6 +2,8 @@ module go.datumapis.com/external-dns-webhook
 
 go 1.27.0
 
+toolchain go1.27.3
+
 require (
 	github.com/prometheus/client_golang v1.24.0
 	github.com/sirupsen/logrus v1.9.4
