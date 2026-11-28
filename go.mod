@@ -11,9 +11,9 @@ require (
 	go.miloapis.com/dns v0.16.1
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261123192653-4dc4fb521066
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.37.2
-	k8s.io/apimachinery v0.37.2
-	k8s.io/client-go v0.37.2
+	k8s.io/api v0.37.3
+	k8s.io/apimachinery v0.37.3
+	k8s.io/client-go v0.37.3
 	sigs.k8s.io/controller-runtime v0.25.3
 	sigs.k8s.io/external-dns v0.15.1
 )
